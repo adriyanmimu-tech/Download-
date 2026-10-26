@@ -1,0 +1,6 @@
+{
+  "name": "PulseSave",
+  "description": "Glassmorphic Social Media Video Downloader and TikTok FYP Safe Anti-Copyright Metadata Scrubber",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

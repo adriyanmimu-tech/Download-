@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">PulseSave</string>
+    <string name="app_tagline">All-in-One Video Saver &amp; TikTok FYP Safe Optimizer</string>
+    <string name="nav_downloader">ডাউনলোডার</string>
+    <string name="nav_scrubber">FYP ক্লিনার</string>
+    <string name="nav_vault">গ্যালারি ভল্ট</string>
+    <string name="nav_settings">API ও সেটিংস</string>
+    <string name="paste_link_hint">TikTok, Instagram, FB, X বা যেকোনো ভিডিও লিংক পেস্ট করুন…</string>
+    <string name="btn_paste">পেস্ট</string>
+    <string name="btn_download_now">ডাউনলোড করুন</string>
+    <string name="popup_select_quality">ভিডিও কোয়ালিটি ও মেটাডাটা অপশন</string>
+    <string name="popup_title_caption">টাইটেল, ক্যাপশন ও হ্যাশট্যাগ</string>
+    <string name="btn_copy_caption">ক্যাপশন কপি করুন</string>
+    <string name="fyp_safe_mode_title">TikTok FYP Safe &amp; Anti-Copyright Shield</string>
+    <string name="fyp_safe_mode_subtitle">মেটাডাটা রিমুভ, নতুন MD5 হ্যাশ ও ভিজ্যুয়াল/অডিও সিগনেচার মডিফায়ার</string>
+    <string name="btn_save_to_gallery">গ্যালারিতে সেভ করুন</string>
+    <string name="scrubber_pick_video">গ্যালারি থেকে ভিডিও সিলেক্ট করুন</string>
+    <string name="scrubber_clean_now">মেটাডাটা রিমুভ ও FYP Safe করুন</string>
+    <string name="vault_empty_title">এখনো কোনো ভিডিও সেভ করা হয়নি</string>
+    <string name="vault_empty_subtitle">সোশ্যাল মিডিয়া লিংক পেস্ট করে বা গ্যালারি থেকে ভিডিও ক্লিন করে এখানে দেখুন</string>
+</resources>
