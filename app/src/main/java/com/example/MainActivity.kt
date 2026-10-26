@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(sharedText) {
                     if (!sharedText.isNullOrBlank()) {
                         pulseViewModel.updateUrlInput(sharedText)
-                        pulseViewModel.analyzeAndOpenQualityPopup()
+                        pulseViewModel.analyzeAndOpenQualityPopup(this@MainActivity)
                     }
                 }
 
@@ -157,7 +157,7 @@ fun PulseSaveMainApp(
                                 viewModel.selectSamplePlatform(platform)
                             },
                             onClickDownloadButton = {
-                                viewModel.analyzeAndOpenQualityPopup()
+                                viewModel.analyzeAndOpenQualityPopup(context)
                             },
                             onPlayLatestVideo = {
                                 uiState.latestDownloaderReport?.let { rep ->

@@ -1,5 +1,7 @@
 package com.example.engine
 
+import android.content.Context
+import android.webkit.CookieManager
 import com.example.data.ExtractorApiSettings
 import com.example.data.SocialPlatform
 import com.example.data.VideoAnalysisResult
@@ -29,41 +31,19 @@ class SocialVideoExtractor {
         .followSslRedirects(true)
         .build()
 
-    // Real, playable HD video streams for quick demo testing when tapping sample platform icons
-    private val samplePlayableStreams = mapOf(
-        SocialPlatform.TIKTOK to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-        SocialPlatform.INSTAGRAM to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-        SocialPlatform.FACEBOOK to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-        SocialPlatform.X_TWITTER to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoy.mp4",
-        SocialPlatform.YOUTUBE to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
-        SocialPlatform.PINTEREST to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4",
-        SocialPlatform.THREADS to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/SubaruOutbackSeeTheWorld.mp4",
-        SocialPlatform.LIKEE to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-    )
-
     suspend fun analyzeVideoLink(
+        context: Context,
         rawUrl: String,
         apiSettings: ExtractorApiSettings
-    ): VideoAnalysisResult = withContext(Dispatchers.IO) {
-        val cleanUrl = extractFirstUrl(rawUrl).ifEmpty { rawUrl.trim() }
-        val platform = SocialPlatform.detectFromUrl(cleanUrl)
-
-        // Check if this is one of the built-in sample placeholder URLs
-        val isBuiltInSampleUrl = SocialPlatform.entries.any { it.sampleUrl.equals(cleanUrl, ignoreCase = true) }
-        if (isBuiltInSampleUrl) {
-            return@withContext buildResultFromStreams(
-                sourceUrl = cleanUrl,
-                platform = platform,
-                title = platform.sampleTitle,
-                description = "${platform.sampleCaption} ${platform.sampleHashtags}",
-                author = "@${platform.displayName.lowercase().replace(" ", "_")}",
-                durationSec = 15,
-                thumbUrl = "",
-                hdUrl = samplePlayableStreams[platform] ?: samplePlayableStreams.values.first(),
-                sdUrl = samplePlayableStreams[platform] ?: samplePlayableStreams.values.first(),
-                audioUrl = null
-            )
+    ): VideoAnalysisResult? = withContext(Dispatchers.IO) {
+        val initialUrl = extractFirstUrl(rawUrl).ifEmpty { rawUrl.trim() }
+        if (!initialUrl.startsWith("http://") && !initialUrl.startsWith("https://")) {
+            return@withContext null
         }
+
+        // Resolve shortlinks (/share/r/, /share/v/, vt.tiktok.com, vm.tiktok.com, fb.watch, pin.it)
+        val cleanUrl = resolveRedirectUrl(initialUrl)
+        val platform = SocialPlatform.detectFromUrl(cleanUrl)
 
         // 1. Custom Extractor API if configured by user
         if (apiSettings.customApiEndpoint.isNotBlank()) {
@@ -85,12 +65,13 @@ class SocialVideoExtractor {
                 sourceUrl = cleanUrl,
                 platform = platform,
                 title = fileTitle,
-                description = platform.sampleCaption,
+                description = fileTitle,
                 author = "@direct_stream",
                 durationSec = 15,
                 thumbUrl = "",
                 hdUrl = cleanUrl,
                 sdUrl = cleanUrl,
+                fallbackUrls = listOf(cleanUrl),
                 audioUrl = null
             )
         }
@@ -98,7 +79,7 @@ class SocialVideoExtractor {
         // 3. Platform-Specific Real Extractors
         when (platform) {
             SocialPlatform.TIKTOK -> {
-                extractTikTokVideo(cleanUrl)?.let { return@withContext it }
+                extractTikTokVideo(initialUrl, cleanUrl)?.let { return@withContext it }
             }
             SocialPlatform.X_TWITTER -> {
                 extractTwitterXVideo(cleanUrl)?.let { return@withContext it }
@@ -107,7 +88,7 @@ class SocialVideoExtractor {
                 extractInstagramVideo(cleanUrl)?.let { return@withContext it }
             }
             SocialPlatform.FACEBOOK -> {
-                extractFacebookVideo(cleanUrl)?.let { return@withContext it }
+                extractFacebookVideo(initialUrl, cleanUrl)?.let { return@withContext it }
             }
             SocialPlatform.YOUTUBE -> {
                 extractYouTubeVideo(cleanUrl)?.let { return@withContext it }
@@ -119,115 +100,161 @@ class SocialVideoExtractor {
                 extractThreadsVideo(cleanUrl)?.let { return@withContext it }
             }
             SocialPlatform.LIKEE -> {
-                extractLikeeVideo(cleanUrl)?.let { return@withContext it }
+                extractGenericOpenGraphVideo(cleanUrl, SocialPlatform.LIKEE)?.let { return@withContext it }
             }
         }
 
-        // 4. Universal Fallback: Try TikWM (supports TikTok/Douyin/CapCut), then OpenGraph / Embed Scraper
-        extractTikTokVideo(cleanUrl)?.let { return@withContext it }
+        // 4. Universal Open Extractors (TikWM + OpenGraph)
+        extractTikTokVideo(initialUrl, cleanUrl)?.let { return@withContext it }
         extractGenericOpenGraphVideo(cleanUrl, platform)?.let { return@withContext it }
 
-        // 5. Final fallback stream so UI never crashes
-        val fallbackStream = samplePlayableStreams[platform] ?: samplePlayableStreams.values.first()
-        buildResultFromStreams(
-            sourceUrl = cleanUrl,
-            platform = platform,
-            title = platform.sampleTitle,
-            description = "${platform.sampleCaption} ${platform.sampleHashtags}",
-            author = extractAuthorHandle(cleanUrl, platform),
-            durationSec = 15,
-            thumbUrl = "",
-            hdUrl = fallbackStream,
-            sdUrl = fallbackStream,
-            audioUrl = null
-        )
+        // 5. Headless Android WebView Stream Sniffer (handles JS-rendered Facebook/Instagram/TikTok/Threads pages)
+        val sniffed = WebViewVideoSniffer.sniffVideoStream(context, cleanUrl)
+        if (sniffed != null && sniffed.videoUrl.startsWith("http")) {
+            return@withContext buildResultFromStreams(
+                sourceUrl = cleanUrl,
+                platform = platform,
+                title = sniffed.title.ifBlank { "${platform.displayName} Video" },
+                description = sniffed.title,
+                author = extractAuthorHandle(cleanUrl, platform),
+                durationSec = 15,
+                thumbUrl = "",
+                hdUrl = sniffed.videoUrl,
+                sdUrl = sniffed.videoUrl,
+                fallbackUrls = listOf(sniffed.videoUrl),
+                audioUrl = null
+            )
+        }
+
+        null
+    }
+
+    private fun resolveRedirectUrl(url: String): String {
+        return try {
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", MOBILE_USER_AGENT)
+                .head()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val resolved = resp.request.url.toString()
+                if (resolved.startsWith("http") && "login" !in resolved.lowercase()) {
+                    resolved
+                } else {
+                    url
+                }
+            }
+        } catch (_: Exception) {
+            url
+        }
     }
 
     /**
-     * Real TikTok No-Watermark Extractor via TikWM API + HTML Universal Data fallback
+     * Real TikTok No-Watermark Extractor:
+     * 1) TikWM API (prioritizing verified `play` + `hdplay` + `wmplay` fallback chain)
+     * 2) LoveTik API (independent TikTok no-watermark extractor)
+     * 3) TikTok Page Universal Rehydration JSON
      */
-    private fun extractTikTokVideo(url: String): VideoAnalysisResult? {
-        // Strategy A: TikWM Public API (Supports HD No-Watermark, Standard No-Watermark & MP3 Audio)
-        try {
-            val formBody = FormBody.Builder()
-                .add("url", url)
-                .add("hd", "1")
-                .build()
-            val req = Request.Builder()
-                .url("https://www.tikwm.com/api/")
-                .header("User-Agent", MOBILE_USER_AGENT)
-                .header("Accept", "application/json")
-                .post(formBody)
-                .build()
+    private fun extractTikTokVideo(originalUrl: String, resolvedUrl: String): VideoAnalysisResult? {
+        for (targetUrl in listOf(originalUrl, resolvedUrl).distinct()) {
+            // Strategy A: TikWM API
+            try {
+                val encoded = URLEncoder.encode(targetUrl, "UTF-8")
+                val req = Request.Builder()
+                    .url("https://www.tikwm.com/api/?url=$encoded&hd=1")
+                    .header("User-Agent", MOBILE_USER_AGENT)
+                    .header("Accept", "application/json")
+                    .build()
 
-            httpClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val bodyStr = resp.body?.string() ?: ""
-                    val json = JSONObject(bodyStr)
-                    if (json.optInt("code", -1) == 0 && json.has("data")) {
-                        val data = json.getJSONObject("data")
-                        val hdPlay = resolveTikWmUrl(data.optString("hdplay"))
-                        val stdPlay = resolveTikWmUrl(data.optString("play"))
-                        val wmPlay = resolveTikWmUrl(data.optString("wmplay"))
-                        val musicUrl = resolveTikWmUrl(data.optString("music"))
-                        val bestHd = hdPlay.ifEmpty { stdPlay }.ifEmpty { wmPlay }
-                        val bestSd = stdPlay.ifEmpty { wmPlay }.ifEmpty { hdPlay }
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val bodyStr = resp.body?.string() ?: ""
+                        val json = JSONObject(bodyStr)
+                        if (json.optInt("code", -1) == 0 && json.has("data")) {
+                            val data = json.getJSONObject("data")
+                            val stdPlay = resolveTikWmUrl(data.optString("play"))
+                            val hdPlay = resolveTikWmUrl(data.optString("hdplay"))
+                            val wmPlay = resolveTikWmUrl(data.optString("wmplay"))
+                            val musicUrl = resolveTikWmUrl(data.optString("music"))
 
-                        if (bestHd.startsWith("http")) {
-                            val rawTitle = data.optString("title").ifBlank { "TikTok Viral Video" }
-                            val duration = data.optInt("duration", 15).coerceAtLeast(1)
-                            val cover = resolveTikWmUrl(data.optString("cover"))
-                            val authorObj = data.optJSONObject("author")
-                            val authorHandle = authorObj?.optString("unique_id")?.let { "@$it" }
-                                ?: "@tiktok_creator"
+                            val allValidStreams = listOf(stdPlay, hdPlay, wmPlay)
+                                .filter { it.startsWith("http") }
+                                .distinct()
 
+                            if (allValidStreams.isNotEmpty()) {
+                                // `stdPlay` is TikWM's direct no-watermark MP4 stream; keep `hdPlay` and `wmPlay` in fallbacks
+                                val primaryHd = stdPlay.ifEmpty { hdPlay }.ifEmpty { wmPlay }
+                                val primarySd = stdPlay.ifEmpty { wmPlay }.ifEmpty { hdPlay }
+                                val rawTitle = data.optString("title").ifBlank { "TikTok Video" }
+                                val duration = data.optInt("duration", 15).coerceAtLeast(1)
+                                val cover = resolveTikWmUrl(data.optString("cover"))
+                                val authorObj = data.optJSONObject("author")
+                                val authorHandle = authorObj?.optString("unique_id")?.let { "@$it" }
+                                    ?: "@tiktok_creator"
+
+                                return buildResultFromStreams(
+                                    sourceUrl = targetUrl,
+                                    platform = SocialPlatform.TIKTOK,
+                                    title = removeHashtagsFromText(rawTitle).take(80).ifBlank { "TikTok Video" },
+                                    description = rawTitle,
+                                    author = authorHandle,
+                                    durationSec = duration,
+                                    thumbUrl = cover,
+                                    hdUrl = primaryHd,
+                                    sdUrl = primarySd,
+                                    fallbackUrls = allValidStreams,
+                                    audioUrl = musicUrl.takeIf { it.startsWith("http") }
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+
+            // Strategy B: LoveTik Public API
+            try {
+                val form = FormBody.Builder()
+                    .add("query", targetUrl)
+                    .build()
+                val req = Request.Builder()
+                    .url("https://lovetik.com/api/ajax/search")
+                    .header("User-Agent", MOBILE_USER_AGENT)
+                    .header("Origin", "https://lovetik.com")
+                    .header("Referer", "https://lovetik.com/")
+                    .post(form)
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string() ?: "")
+                        val links = json.optJSONArray("links") ?: JSONArray()
+                        val streamList = mutableListOf<String>()
+                        for (i in 0 until links.length()) {
+                            val linkObj = links.getJSONObject(i)
+                            val aUrl = linkObj.optString("a")
+                            if (aUrl.startsWith("http")) streamList.add(aUrl)
+                        }
+                        if (streamList.isNotEmpty()) {
+                            val desc = json.optString("desc").ifBlank { "TikTok Video" }
+                            val author = json.optString("author").ifBlank { "@tiktok" }
                             return buildResultFromStreams(
-                                sourceUrl = url,
+                                sourceUrl = targetUrl,
                                 platform = SocialPlatform.TIKTOK,
-                                title = removeHashtagsFromText(rawTitle).take(80).ifBlank { "TikTok Video" },
-                                description = rawTitle,
-                                author = authorHandle,
-                                durationSec = duration,
-                                thumbUrl = cover,
-                                hdUrl = bestHd,
-                                sdUrl = bestSd,
-                                audioUrl = musicUrl.takeIf { it.startsWith("http") }
+                                title = removeHashtagsFromText(desc).take(75).ifBlank { "TikTok Video" },
+                                description = desc,
+                                author = if (author.startsWith("@")) author else "@$author",
+                                durationSec = 15,
+                                thumbUrl = json.optString("cover"),
+                                hdUrl = streamList.first(),
+                                sdUrl = streamList.getOrElse(1) { streamList.first() },
+                                fallbackUrls = streamList,
+                                audioUrl = streamList.lastOrNull()
                             )
                         }
                     }
                 }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
-        }
-
-        // Strategy B: Direct TikTok Web Page JSON (__UNIVERSAL_DATA_FOR_REHYDRATION__)
-        try {
-            val req = Request.Builder()
-                .url(url)
-                .header("User-Agent", DESKTOP_USER_AGENT)
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .build()
-            httpClient.newCall(req).execute().use { resp ->
-                val html = resp.body?.string() ?: return null
-                val playAddr = extractJsonField(html, "playAddr")
-                    ?: extractJsonField(html, "downloadAddr")
-                if (!playAddr.isNullOrBlank() && playAddr.startsWith("http")) {
-                    val desc = extractJsonField(html, "desc") ?: SocialPlatform.TIKTOK.sampleCaption
-                    return buildResultFromStreams(
-                        sourceUrl = url,
-                        platform = SocialPlatform.TIKTOK,
-                        title = removeHashtagsFromText(desc).take(70).ifBlank { "TikTok Video" },
-                        description = desc,
-                        author = extractAuthorHandle(url, SocialPlatform.TIKTOK),
-                        durationSec = 15,
-                        thumbUrl = "",
-                        hdUrl = playAddr,
-                        sdUrl = playAddr,
-                        audioUrl = null
-                    )
-                }
-            }
-        } catch (_: Exception) {
         }
         return null
     }
@@ -241,7 +268,7 @@ class SocialVideoExtractor {
     }
 
     /**
-     * Real X / Twitter Video Extractor via VxTwitter API + FxTwitter OpenGraph fallback
+     * Real X / Twitter Video Extractor via VxTwitter API
      */
     private fun extractTwitterXVideo(url: String): VideoAnalysisResult? {
         try {
@@ -275,6 +302,7 @@ class SocialVideoExtractor {
                                     thumbUrl = thumb,
                                     hdUrl = mediaUrl,
                                     sdUrl = mediaUrl,
+                                    fallbackUrls = listOf(mediaUrl),
                                     audioUrl = null
                                 )
                             }
@@ -288,38 +316,38 @@ class SocialVideoExtractor {
     }
 
     /**
-     * Real Instagram Reels & Post Video Extractor via Embed / GraphQL / Proxy Meta Parser
+     * Real Instagram Reels & Post Video Extractor (Handles escaped contextJSON in /embed/captioned/ + proxy meta)
      */
     private fun extractInstagramVideo(url: String): VideoAnalysisResult? {
         val shortcodeMatch = Regex("instagram\\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)").find(url)
         val shortcode = shortcodeMatch?.groupValues?.get(1)
 
-        // Strategy A: Proxy Bot Meta (ddinstagram / kkinstagram / vxinstagram)
         if (!shortcode.isNullOrBlank()) {
-            val proxyHosts = listOf(
+            val endpoints = listOf(
+                "https://www.instagram.com/p/$shortcode/embed/captioned/",
+                "https://www.instagram.com/reel/$shortcode/embed/captioned/",
                 "https://www.ddinstagram.com/reel/$shortcode",
-                "https://kkinstagram.com/reel/$shortcode",
-                "https://www.instagram.com/p/$shortcode/embed/captioned/"
+                "https://kkinstagram.com/reel/$shortcode"
             )
-            for (proxyUrl in proxyHosts) {
+            for (ep in endpoints) {
                 try {
                     val req = Request.Builder()
-                        .url(proxyUrl)
-                        .header("User-Agent", if ("embed" in proxyUrl) DESKTOP_USER_AGENT else BOT_USER_AGENT)
+                        .url(ep)
+                        .header("User-Agent", if ("embed" in ep) DESKTOP_USER_AGENT else BOT_USER_AGENT)
                         .build()
                     httpClient.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) {
                             val html = resp.body?.string() ?: ""
-                            val videoUrl = extractMetaContent(html, "og:video:secure_url")
+                            val videoUrl = extractJsonField(html, "video_url")
+                                ?: extractMetaContent(html, "og:video:secure_url")
                                 ?: extractMetaContent(html, "og:video")
                                 ?: extractMetaContent(html, "twitter:player:stream")
-                                ?: extractJsonField(html, "video_url")
 
                             if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http") && !videoUrl.endsWith(".html")) {
                                 val cleanVideoUrl = unescapeJsonUrl(videoUrl)
                                 val desc = extractMetaContent(html, "og:description")
-                                    ?: extractMetaContent(html, "twitter:description")
-                                    ?: SocialPlatform.INSTAGRAM.sampleCaption
+                                    ?: extractJsonField(html, "text")
+                                    ?: "Instagram Reel Video"
                                 val thumb = extractMetaContent(html, "og:image") ?: ""
                                 return buildResultFromStreams(
                                     sourceUrl = url,
@@ -331,6 +359,7 @@ class SocialVideoExtractor {
                                     thumbUrl = unescapeJsonUrl(thumb),
                                     hdUrl = cleanVideoUrl,
                                     sdUrl = cleanVideoUrl,
+                                    fallbackUrls = listOf(cleanVideoUrl),
                                     audioUrl = null
                                 )
                             }
@@ -340,194 +369,236 @@ class SocialVideoExtractor {
                 }
             }
         }
+        return null
+    }
 
-        // Strategy B: Direct Instagram Page video_versions / video_url parser
-        try {
-            val req = Request.Builder()
-                .url(url)
-                .header("User-Agent", DESKTOP_USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .build()
-            httpClient.newCall(req).execute().use { resp ->
-                val html = resp.body?.string() ?: return null
-                val videoUrl = extractJsonField(html, "video_url")
-                    ?: extractMetaContent(html, "og:video")
-                if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
-                    val desc = extractMetaContent(html, "og:title")
-                        ?: extractMetaContent(html, "og:description")
-                        ?: "Instagram Reel Video"
-                    return buildResultFromStreams(
-                        sourceUrl = url,
-                        platform = SocialPlatform.INSTAGRAM,
-                        title = removeHashtagsFromText(desc).take(75).ifBlank { "Instagram Reel" },
-                        description = desc,
-                        author = "@instagram_creator",
-                        durationSec = 15,
-                        thumbUrl = "",
-                        hdUrl = unescapeJsonUrl(videoUrl),
-                        sdUrl = unescapeJsonUrl(videoUrl),
-                        audioUrl = null
-                    )
+    /**
+     * Real Facebook Watch / Reels / Video Extractor (Supports /share/r/, /share/v/, fb.watch, and mbasic video_redirect)
+     */
+    private fun extractFacebookVideo(originalUrl: String, resolvedUrl: String): VideoAnalysisResult? {
+        val candidateUrls = listOf(resolvedUrl, originalUrl).distinct()
+        val userAgents = listOf(
+            DESKTOP_USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+            BOT_USER_AGENT
+        )
+
+        for (target in candidateUrls) {
+            for (ua in userAgents) {
+                try {
+                    val req = Request.Builder()
+                        .url(target)
+                        .header("User-Agent", ua)
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .build()
+
+                    httpClient.newCall(req).execute().use { resp ->
+                        val html = resp.body?.string() ?: ""
+                        val hdUrl = extractJsonField(html, "browser_native_hd_url")
+                            ?: extractJsonField(html, "playable_url_quality_hd")
+                            ?: extractJsonField(html, "hd_src_no_ratelimit")
+                            ?: extractJsonField(html, "hd_src")
+
+                        val sdUrl = extractJsonField(html, "browser_native_sd_url")
+                            ?: extractJsonField(html, "playable_url")
+                            ?: extractJsonField(html, "sd_src_no_ratelimit")
+                            ?: extractJsonField(html, "sd_src")
+                            ?: extractFacebookMbasicRedirect(html)
+                            ?: extractMetaContent(html, "og:video:secure_url")
+                            ?: extractMetaContent(html, "og:video")
+
+                        val streams = listOfNotNull(hdUrl, sdUrl)
+                            .map { unescapeJsonUrl(it) }
+                            .filter { it.startsWith("http") && !it.endsWith(".html") }
+                            .distinct()
+
+                        if (streams.isNotEmpty()) {
+                            val title = extractMetaContent(html, "og:title")
+                                ?: extractHtmlTitle(html)
+                                ?: "Facebook Video"
+                            val desc = extractMetaContent(html, "og:description") ?: title
+                            val thumb = extractMetaContent(html, "og:image") ?: ""
+                            return buildResultFromStreams(
+                                sourceUrl = target,
+                                platform = SocialPlatform.FACEBOOK,
+                                title = removeHashtagsFromText(title).take(75).ifBlank { "Facebook Video" },
+                                description = desc,
+                                author = "@facebook_video",
+                                durationSec = 20,
+                                thumbUrl = unescapeJsonUrl(thumb),
+                                hdUrl = streams.first(),
+                                sdUrl = streams.last(),
+                                fallbackUrls = streams,
+                                audioUrl = null
+                            )
+                        }
+                    }
+                } catch (_: Exception) {
                 }
             }
-        } catch (_: Exception) {
+        }
+        return null
+    }
+
+    private fun extractFacebookMbasicRedirect(html: String): String? {
+        val m = Regex("video_redirect/\\?src=([^\"'&]+)").find(html)
+        if (m != null) {
+            return try {
+                java.net.URLDecoder.decode(m.groupValues[1], "UTF-8")
+            } catch (_: Exception) {
+                null
+            }
         }
         return null
     }
 
     /**
-     * Real Facebook Watch / Reels / Video Extractor via Native HD & SD Stream Parser
+     * Real YouTube Shorts & Full Video Extractor:
+     * Strategy 1: YouTube InnerTube ANDROID_VR client
+     * Strategy 2: YouTube InnerTube IOS client (iPhone16,2)
+     * Strategy 3: YouTube InnerTube ANDROID_TESTSUITE client
+     * Strategy 4: Public Piped / Invidious API fallback
      */
-    private fun extractFacebookVideo(url: String): VideoAnalysisResult? {
-        val headersList = listOf(
-            DESKTOP_USER_AGENT,
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-            BOT_USER_AGENT
+    private fun extractYouTubeVideo(url: String): VideoAnalysisResult? {
+        val videoId = extractYouTubeVideoId(url) ?: return null
+
+        data class InnerTubeClientSpec(
+            val clientName: String,
+            val clientVersion: String,
+            val userAgent: String,
+            val extraClientFields: Map<String, Any> = emptyMap()
         )
-        for (ua in headersList) {
+
+        val clients = listOf(
+            InnerTubeClientSpec(
+                clientName = "ANDROID_VR",
+                clientVersion = "1.60.19",
+                userAgent = YOUTUBE_VR_USER_AGENT,
+                extraClientFields = mapOf(
+                    "androidSdkVersion" to 34,
+                    "deviceMake" to "Oculus",
+                    "deviceModel" to "Quest 3",
+                    "osName" to "Android",
+                    "osVersion" to "14"
+                )
+            ),
+            InnerTubeClientSpec(
+                clientName = "IOS",
+                clientVersion = "19.45.4",
+                userAgent = YOUTUBE_IOS_USER_AGENT,
+                extraClientFields = mapOf(
+                    "deviceMake" to "Apple",
+                    "deviceModel" to "iPhone16,2",
+                    "osName" to "iPhone",
+                    "osVersion" to "18.1.0.22B83"
+                )
+            ),
+            InnerTubeClientSpec(
+                clientName = "ANDROID_TESTSUITE",
+                clientVersion = "1.9",
+                userAgent = YOUTUBE_TESTSUITE_USER_AGENT,
+                extraClientFields = mapOf(
+                    "androidSdkVersion" to 34,
+                    "osName" to "Android",
+                    "osVersion" to "14"
+                )
+            )
+        )
+
+        val allFoundCombinedMp4s = mutableListOf<String>()
+        var foundTitle = "YouTube Video"
+        var foundAuthor = "@youtube_creator"
+        var foundDesc = "YouTube Video"
+        var foundDuration = 15
+        var foundAudioM4a: String? = null
+
+        for (spec in clients) {
             try {
+                val clientJson = JSONObject().apply {
+                    put("clientName", spec.clientName)
+                    put("clientVersion", spec.clientVersion)
+                    put("hl", "en")
+                    put("gl", "US")
+                    spec.extraClientFields.forEach { (k, v) -> put(k, v) }
+                }
+                val payload = JSONObject().apply {
+                    put("videoId", videoId)
+                    put("contentCheckOk", true)
+                    put("racyCheckOk", true)
+                    put("context", JSONObject().apply {
+                        put("client", clientJson)
+                    })
+                }
                 val req = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", ua)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    .header("Sec-Fetch-Mode", "navigate")
+                    .url("https://www.youtube.com/youtubei/v1/player?prettyPrint=false")
+                    .header("User-Agent", spec.userAgent)
+                    .header("Content-Type", "application/json")
+                    .header("X-Goog-Api-Format-Version", "2")
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
                 httpClient.newCall(req).execute().use { resp ->
-                    val html = resp.body?.string() ?: ""
-                    val hdUrl = extractJsonField(html, "browser_native_hd_url")
-                        ?: extractJsonField(html, "playable_url_quality_hd")
-                        ?: extractJsonField(html, "hd_src_no_ratelimit")
-                        ?: extractJsonField(html, "hd_src")
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string() ?: "")
+                        val videoDetails = json.optJSONObject("videoDetails")
+                        if (videoDetails != null) {
+                            foundTitle = videoDetails.optString("title").ifBlank { foundTitle }
+                            foundAuthor = videoDetails.optString("author").takeIf { it.isNotBlank() }?.let { "@$it" } ?: foundAuthor
+                            foundDesc = videoDetails.optString("shortDescription").ifBlank { foundTitle }
+                            foundDuration = videoDetails.optString("lengthSeconds").toIntOrNull() ?: foundDuration
+                        }
 
-                    val sdUrl = extractJsonField(html, "browser_native_sd_url")
-                        ?: extractJsonField(html, "playable_url")
-                        ?: extractJsonField(html, "sd_src_no_ratelimit")
-                        ?: extractJsonField(html, "sd_src")
-                        ?: extractMetaContent(html, "og:video:secure_url")
-                        ?: extractMetaContent(html, "og:video")
+                        val streamingData = json.optJSONObject("streamingData")
+                        val formats = streamingData?.optJSONArray("formats") ?: JSONArray()
+                        val adaptiveFormats = streamingData?.optJSONArray("adaptiveFormats") ?: JSONArray()
 
-                    val bestHd = hdUrl ?: sdUrl
-                    val bestSd = sdUrl ?: hdUrl
+                        for (i in 0 until formats.length()) {
+                            val fmt = formats.getJSONObject(i)
+                            val mime = fmt.optString("mimeType")
+                            val streamUrl = fmt.optString("url")
+                            if (streamUrl.startsWith("http") && mime.startsWith("video/mp4")) {
+                                allFoundCombinedMp4s.add(streamUrl)
+                            }
+                        }
 
-                    if (!bestHd.isNullOrBlank() && bestHd.startsWith("http")) {
-                        val title = extractMetaContent(html, "og:title")
-                            ?: extractHtmlTitle(html)
-                            ?: "Facebook Watch Video"
-                        val desc = extractMetaContent(html, "og:description") ?: title
-                        val thumb = extractMetaContent(html, "og:image") ?: ""
-                        return buildResultFromStreams(
-                            sourceUrl = url,
-                            platform = SocialPlatform.FACEBOOK,
-                            title = removeHashtagsFromText(title).take(75).ifBlank { "Facebook Video" },
-                            description = desc,
-                            author = "@facebook_watch",
-                            durationSec = 20,
-                            thumbUrl = unescapeJsonUrl(thumb),
-                            hdUrl = unescapeJsonUrl(bestHd),
-                            sdUrl = unescapeJsonUrl(bestSd ?: bestHd),
-                            audioUrl = null
-                        )
+                        for (i in 0 until adaptiveFormats.length()) {
+                            val fmt = adaptiveFormats.getJSONObject(i)
+                            val mime = fmt.optString("mimeType")
+                            val streamUrl = fmt.optString("url")
+                            if (streamUrl.startsWith("http") && mime.startsWith("audio/mp4") && foundAudioM4a == null) {
+                                foundAudioM4a = streamUrl
+                            }
+                        }
                     }
                 }
             } catch (_: Exception) {
             }
         }
-        return null
-    }
 
-    /**
-     * Real YouTube Shorts / Video Extractor via YouTube InnerTube ANDROID_VR API + Piped Fallback
-     */
-    private fun extractYouTubeVideo(url: String): VideoAnalysisResult? {
-        val videoId = extractYouTubeVideoId(url) ?: return null
-
-        // Strategy A: YouTube InnerTube Player API (ANDROID_VR client returns direct playable MP4 streams)
-        try {
-            val payload = JSONObject().apply {
-                put("videoId", videoId)
-                put("context", JSONObject().apply {
-                    put("client", JSONObject().apply {
-                        put("clientName", "ANDROID_VR")
-                        put("clientVersion", "1.60.19")
-                        put("androidSdkVersion", 34)
-                        put("hl", "en")
-                        put("gl", "US")
-                    })
-                })
-            }
-            val req = Request.Builder()
-                .url("https://www.youtube.com/youtubei/v1/player?prettyPrint=false")
-                .header("User-Agent", "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1; Cronet/132.0.6808.3)")
-                .header("Content-Type", "application/json")
-                .post(payload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            httpClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val json = JSONObject(resp.body?.string() ?: "")
-                    val videoDetails = json.optJSONObject("videoDetails")
-                    val title = videoDetails?.optString("title") ?: "YouTube Shorts Video"
-                    val author = videoDetails?.optString("author")?.let { "@$it" } ?: "@youtube_creator"
-                    val desc = videoDetails?.optString("shortDescription") ?: title
-                    val duration = videoDetails?.optString("lengthSeconds")?.toIntOrNull() ?: 15
-
-                    val streamingData = json.optJSONObject("streamingData")
-                    val formats = streamingData?.optJSONArray("formats") ?: JSONArray()
-                    val adaptiveFormats = streamingData?.optJSONArray("adaptiveFormats") ?: JSONArray()
-
-                    var bestMp4Url = ""
-                    var sdMp4Url = ""
-                    var audioM4aUrl: String? = null
-
-                    for (i in 0 until formats.length()) {
-                        val fmt = formats.getJSONObject(i)
-                        val mime = fmt.optString("mimeType")
-                        val streamUrl = fmt.optString("url")
-                        if (streamUrl.startsWith("http") && mime.startsWith("video/mp4")) {
-                            val height = fmt.optInt("height", 360)
-                            if (height >= 720 || bestMp4Url.isEmpty()) {
-                                bestMp4Url = streamUrl
-                            }
-                            if (height <= 480 || sdMp4Url.isEmpty()) {
-                                sdMp4Url = streamUrl
-                            }
-                        }
-                    }
-
-                    for (i in 0 until adaptiveFormats.length()) {
-                        val fmt = adaptiveFormats.getJSONObject(i)
-                        val mime = fmt.optString("mimeType")
-                        val streamUrl = fmt.optString("url")
-                        if (streamUrl.startsWith("http") && mime.startsWith("audio/mp4") && audioM4aUrl == null) {
-                            audioM4aUrl = streamUrl
-                        }
-                    }
-
-                    if (bestMp4Url.isNotBlank()) {
-                        return buildResultFromStreams(
-                            sourceUrl = url,
-                            platform = SocialPlatform.YOUTUBE,
-                            title = title,
-                            description = desc,
-                            author = author,
-                            durationSec = duration,
-                            thumbUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
-                            hdUrl = bestMp4Url,
-                            sdUrl = sdMp4Url.ifEmpty { bestMp4Url },
-                            audioUrl = audioM4aUrl
-                        )
-                    }
-                }
-            }
-        } catch (_: Exception) {
+        if (allFoundCombinedMp4s.isNotEmpty()) {
+            val distinctStreams = allFoundCombinedMp4s.distinct()
+            return buildResultFromStreams(
+                sourceUrl = url,
+                platform = SocialPlatform.YOUTUBE,
+                title = foundTitle,
+                description = foundDesc,
+                author = foundAuthor,
+                durationSec = foundDuration,
+                thumbUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+                hdUrl = distinctStreams.first(),
+                sdUrl = distinctStreams.last(),
+                fallbackUrls = distinctStreams,
+                audioUrl = foundAudioM4a
+            )
         }
 
-        // Strategy B: Public Piped API fallback
+        // Strategy 4: Public Piped & Invidious API Fallback
         val pipedInstances = listOf(
             "https://pipedapi.kavin.rocks/streams/$videoId",
-            "https://pipedapi.tokhmi.xyz/streams/$videoId"
+            "https://pipedapi.leptons.xyz/streams/$videoId",
+            "https://pipedapi.nosebs.ru/streams/$videoId"
         )
         for (apiUrl in pipedInstances) {
             try {
@@ -538,29 +609,34 @@ class SocialVideoExtractor {
                 httpClient.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {
                         val json = JSONObject(resp.body?.string() ?: "")
-                        val title = json.optString("title", "YouTube Video")
+                        val title = json.optString("title", foundTitle)
                         val desc = json.optString("description", title)
                         val uploader = json.optString("uploader", "youtube")
                         val duration = json.optInt("duration", 15)
                         val videoStreams = json.optJSONArray("videoStreams") ?: JSONArray()
+                        val pipedMp4s = mutableListOf<String>()
                         for (i in 0 until videoStreams.length()) {
                             val vs = videoStreams.getJSONObject(i)
                             val videoOnly = vs.optBoolean("videoOnly", true)
                             val sUrl = vs.optString("url")
                             if (!videoOnly && sUrl.startsWith("http")) {
-                                return buildResultFromStreams(
-                                    sourceUrl = url,
-                                    platform = SocialPlatform.YOUTUBE,
-                                    title = title,
-                                    description = desc,
-                                    author = "@$uploader",
-                                    durationSec = duration,
-                                    thumbUrl = json.optString("thumbnailUrl"),
-                                    hdUrl = sUrl,
-                                    sdUrl = sUrl,
-                                    audioUrl = null
-                                )
+                                pipedMp4s.add(sUrl)
                             }
+                        }
+                        if (pipedMp4s.isNotEmpty()) {
+                            return buildResultFromStreams(
+                                sourceUrl = url,
+                                platform = SocialPlatform.YOUTUBE,
+                                title = title,
+                                description = desc,
+                                author = "@$uploader",
+                                durationSec = duration,
+                                thumbUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+                                hdUrl = pipedMp4s.first(),
+                                sdUrl = pipedMp4s.last(),
+                                fallbackUrls = pipedMp4s,
+                                audioUrl = null
+                            )
                         }
                     }
                 }
@@ -570,9 +646,6 @@ class SocialVideoExtractor {
         return null
     }
 
-    /**
-     * Real Pinterest Video Pin Extractor
-     */
     private fun extractPinterestVideo(url: String): VideoAnalysisResult? {
         try {
             val req = Request.Builder()
@@ -586,6 +659,7 @@ class SocialVideoExtractor {
                     ?: extractJsonField(html, "contentUrl")?.takeIf { ".mp4" in it }
                     ?: extractMetaContent(html, "og:video")
                 if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
+                    val clean = unescapeJsonUrl(videoUrl)
                     val title = extractMetaContent(html, "og:title") ?: "Pinterest Video Pin"
                     val desc = extractMetaContent(html, "og:description") ?: title
                     return buildResultFromStreams(
@@ -596,8 +670,9 @@ class SocialVideoExtractor {
                         author = "@pinterest_creator",
                         durationSec = 15,
                         thumbUrl = extractMetaContent(html, "og:image") ?: "",
-                        hdUrl = unescapeJsonUrl(videoUrl),
-                        sdUrl = unescapeJsonUrl(videoUrl),
+                        hdUrl = clean,
+                        sdUrl = clean,
+                        fallbackUrls = listOf(clean),
                         audioUrl = null
                     )
                 }
@@ -607,9 +682,6 @@ class SocialVideoExtractor {
         return null
     }
 
-    /**
-     * Real Threads Video Extractor
-     */
     private fun extractThreadsVideo(url: String): VideoAnalysisResult? {
         try {
             val req = Request.Builder()
@@ -622,6 +694,7 @@ class SocialVideoExtractor {
                     ?: extractMetaContent(html, "og:video")
                     ?: extractJsonField(html, "video_url")
                 if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
+                    val clean = unescapeJsonUrl(videoUrl)
                     val desc = extractMetaContent(html, "og:description")
                         ?: extractMetaContent(html, "og:title")
                         ?: "Threads Video"
@@ -633,8 +706,9 @@ class SocialVideoExtractor {
                         author = extractAuthorHandle(url, SocialPlatform.THREADS),
                         durationSec = 15,
                         thumbUrl = extractMetaContent(html, "og:image") ?: "",
-                        hdUrl = unescapeJsonUrl(videoUrl),
-                        sdUrl = unescapeJsonUrl(videoUrl),
+                        hdUrl = clean,
+                        sdUrl = clean,
+                        fallbackUrls = listOf(clean),
                         audioUrl = null
                     )
                 }
@@ -642,13 +716,6 @@ class SocialVideoExtractor {
         } catch (_: Exception) {
         }
         return null
-    }
-
-    /**
-     * Real Likee / SnackVideo Extractor
-     */
-    private fun extractLikeeVideo(url: String): VideoAnalysisResult? {
-        return extractGenericOpenGraphVideo(url, SocialPlatform.LIKEE)
     }
 
     private fun extractGenericOpenGraphVideo(
@@ -668,13 +735,14 @@ class SocialVideoExtractor {
                         return buildResultFromStreams(
                             sourceUrl = url,
                             platform = platform,
-                            title = platform.sampleTitle,
-                            description = platform.sampleCaption,
+                            title = "${platform.displayName} Video",
+                            description = "${platform.displayName} Video",
                             author = extractAuthorHandle(url, platform),
                             durationSec = 15,
                             thumbUrl = "",
                             hdUrl = url,
                             sdUrl = url,
+                            fallbackUrls = listOf(url),
                             audioUrl = null
                         )
                     }
@@ -687,21 +755,22 @@ class SocialVideoExtractor {
                         ?: extractJsonField(html, "video_url")
 
                     if (!ogVideo.isNullOrBlank() && ogVideo.startsWith("http") && !ogVideo.endsWith(".html")) {
+                        val clean = unescapeJsonUrl(ogVideo)
                         val title = extractMetaContent(html, "og:title")
                             ?: extractHtmlTitle(html)
-                            ?: platform.sampleTitle
-                        val desc = extractMetaContent(html, "og:description")
-                            ?: title
+                            ?: "${platform.displayName} Video"
+                        val desc = extractMetaContent(html, "og:description") ?: title
                         return buildResultFromStreams(
                             sourceUrl = url,
                             platform = platform,
-                            title = removeHashtagsFromText(title).take(75).ifBlank { platform.sampleTitle },
+                            title = removeHashtagsFromText(title).take(75).ifBlank { "${platform.displayName} Video" },
                             description = desc,
                             author = extractAuthorHandle(url, platform),
                             durationSec = 15,
                             thumbUrl = extractMetaContent(html, "og:image") ?: "",
-                            hdUrl = unescapeJsonUrl(ogVideo),
-                            sdUrl = unescapeJsonUrl(ogVideo),
+                            hdUrl = clean,
+                            sdUrl = clean,
+                            fallbackUrls = listOf(clean),
                             audioUrl = null
                         )
                     }
@@ -722,6 +791,7 @@ class SocialVideoExtractor {
         thumbUrl: String,
         hdUrl: String,
         sdUrl: String,
+        fallbackUrls: List<String>,
         audioUrl: String?
     ): VideoAnalysisResult {
         val extractedHashtags = extractHashtags(description).ifEmpty { platform.sampleHashtags }
@@ -736,6 +806,7 @@ class SocialVideoExtractor {
                 bitrateKbps = 4800,
                 estimatedSizeMb = 12.4,
                 streamUrl = hdUrl,
+                fallbackStreamUrls = fallbackUrls,
                 isNoWatermark = true,
                 isAudioOnly = false
             ),
@@ -747,6 +818,7 @@ class SocialVideoExtractor {
                 bitrateKbps = 2600,
                 estimatedSizeMb = 7.8,
                 streamUrl = sdUrl.ifBlank { hdUrl },
+                fallbackStreamUrls = fallbackUrls,
                 isNoWatermark = true,
                 isAudioOnly = false
             ),
@@ -758,6 +830,7 @@ class SocialVideoExtractor {
                 bitrateKbps = 1500,
                 estimatedSizeMb = 4.5,
                 streamUrl = sdUrl.ifBlank { hdUrl },
+                fallbackStreamUrls = fallbackUrls,
                 isNoWatermark = true,
                 isAudioOnly = false
             ),
@@ -769,6 +842,7 @@ class SocialVideoExtractor {
                 bitrateKbps = 320,
                 estimatedSizeMb = 1.9,
                 streamUrl = audioUrl ?: sdUrl.ifBlank { hdUrl },
+                fallbackStreamUrls = fallbackUrls,
                 isNoWatermark = true,
                 isAudioOnly = true
             )
@@ -793,38 +867,91 @@ class SocialVideoExtractor {
         )
     }
 
+    /**
+     * Downloads the REAL video stream (trying primary streamUrl + fallbackStreamUrls + WebView sniffer if needed).
+     * NEVER substitutes any demo video!
+     */
     suspend fun downloadVideoStreamToCache(
+        context: Context,
         cacheDir: File,
+        sourcePageUrl: String,
         qualityOption: VideoQualityOption,
         onProgress: suspend (Float) -> Unit
-    ): File = withContext(Dispatchers.IO) {
+    ): File? = withContext(Dispatchers.IO) {
         val tempFile = File(cacheDir, "raw_download_${System.currentTimeMillis()}.mp4")
-        var downloadedOk = false
+        val candidateUrls = (listOf(qualityOption.streamUrl) + qualityOption.fallbackStreamUrls)
+            .filter { it.startsWith("http") }
+            .distinct()
+            .toMutableList()
 
-        val streamUrl = qualityOption.streamUrl
+        for (streamUrl in candidateUrls) {
+            if (tryDownloadStreamToFile(streamUrl, sourcePageUrl, tempFile, onProgress)) {
+                onProgress(1.0f)
+                return@withContext tempFile
+            }
+        }
+
+        // Last resort: use Headless WebView Sniffer on sourcePageUrl to get a fresh signed CDN stream URL
+        val sniffed = WebViewVideoSniffer.sniffVideoStream(context, sourcePageUrl)
+        if (sniffed != null && sniffed.videoUrl.startsWith("http")) {
+            if (tryDownloadStreamToFile(sniffed.videoUrl, sourcePageUrl, tempFile, onProgress)) {
+                onProgress(1.0f)
+                return@withContext tempFile
+            }
+        }
+
+        tempFile.delete()
+        null
+    }
+
+    private suspend fun tryDownloadStreamToFile(
+        streamUrl: String,
+        sourcePageUrl: String,
+        tempFile: File,
+        onProgress: suspend (Float) -> Unit
+    ): Boolean {
+        val isGoogleVideo = "googlevideo.com" in streamUrl
+        val downloadUserAgent = when {
+            isGoogleVideo && "c=IOS" in streamUrl -> YOUTUBE_IOS_USER_AGENT
+            isGoogleVideo && "c=ANDROID_TESTSUITE" in streamUrl -> YOUTUBE_TESTSUITE_USER_AGENT
+            isGoogleVideo -> YOUTUBE_VR_USER_AGENT
+            else -> MOBILE_USER_AGENT
+        }
+
         val referer = when {
+            isGoogleVideo -> ""
             "tikwm.com" in streamUrl || "tiktok" in streamUrl -> "https://www.tiktok.com/"
             "instagram" in streamUrl || "cdninstagram" in streamUrl -> "https://www.instagram.com/"
             "fbcdn" in streamUrl || "facebook" in streamUrl -> "https://www.facebook.com/"
             "pinimg" in streamUrl -> "https://www.pinterest.com/"
             "twimg" in streamUrl -> "https://x.com/"
-            else -> ""
+            else -> sourcePageUrl
         }
 
-        try {
+        return try {
             onProgress(0.08f)
             val reqBuilder = Request.Builder()
                 .url(streamUrl)
-                .header("User-Agent", MOBILE_USER_AGENT)
+                .header("User-Agent", downloadUserAgent)
                 .header("Accept", "*/*")
-            if (referer.isNotEmpty()) {
+            if (referer.isNotBlank()) {
                 reqBuilder.header("Referer", referer)
+            }
+            if (!isGoogleVideo) {
+                val cookie = try {
+                    CookieManager.getInstance().getCookie(streamUrl)
+                        ?: CookieManager.getInstance().getCookie(sourcePageUrl)
+                } catch (_: Exception) {
+                    null
+                }
+                if (!cookie.isNullOrBlank()) {
+                    reqBuilder.header("Cookie", cookie)
+                }
             }
 
             httpClient.newCall(reqBuilder.build()).execute().use { response ->
                 val contentType = (response.header("Content-Type") ?: "").lowercase()
-                // Reject HTML pages masquerading as video streams
-                if (response.isSuccessful && response.body != null && !contentType.contains("text/html")) {
+                if (response.isSuccessful && response.body != null && !contentType.contains("text/html") && !contentType.contains("application/json")) {
                     val body = response.body!!
                     val totalBytes = body.contentLength().coerceAtLeast(1_500_000L)
                     var bytesCopied = 0L
@@ -836,71 +963,29 @@ class SocialVideoExtractor {
                             while (input.read(buffer).also { read = it } != -1) {
                                 output.write(buffer, 0, read)
                                 bytesCopied += read
-                                val pct = (bytesCopied.toFloat() / totalBytes.toFloat()).coerceIn(0.10f, 0.94f)
+                                val pct = (bytesCopied.toFloat() / totalBytes.toFloat()).coerceIn(0.10f, 0.95f)
                                 onProgress(pct)
                             }
                             output.flush()
                         }
                     }
-                    // Verify file is a genuine binary media file (> 15 KB and not starting with <!DOCTYPE or <html)
-                    if (tempFile.exists() && tempFile.length() > 15_000L && !isHtmlFile(tempFile)) {
-                        downloadedOk = true
+                    if (tempFile.exists() && tempFile.length() > 20_000L && !isHtmlOrJsonFile(tempFile)) {
+                        return true
                     }
                 }
             }
+            false
         } catch (_: Exception) {
-            downloadedOk = false
+            false
         }
-
-        // If the primary stream failed or returned HTML, download from a guaranteed real HD video CDN stream
-        if (!downloadedOk) {
-            try {
-                val backupUrl = samplePlayableStreams.values.first()
-                val backupReq = Request.Builder()
-                    .url(backupUrl)
-                    .header("User-Agent", MOBILE_USER_AGENT)
-                    .build()
-                httpClient.newCall(backupReq).execute().use { response ->
-                    if (response.isSuccessful && response.body != null) {
-                        val body = response.body!!
-                        val totalBytes = body.contentLength().coerceAtLeast(1_500_000L)
-                        var bytesCopied = 0L
-                        val buffer = ByteArray(32 * 1024)
-                        body.byteStream().use { input ->
-                            FileOutputStream(tempFile).use { output ->
-                                var read: Int
-                                while (input.read(buffer).also { read = it } != -1) {
-                                    output.write(buffer, 0, read)
-                                    bytesCopied += read
-                                    val pct = (bytesCopied.toFloat() / totalBytes.toFloat()).coerceIn(0.15f, 0.95f)
-                                    onProgress(pct)
-                                }
-                                output.flush()
-                            }
-                        }
-                        if (tempFile.exists() && tempFile.length() > 15_000L) {
-                            downloadedOk = true
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-            }
-        }
-
-        if (!downloadedOk) {
-            FypMediaScrubberEngine.generateValidPlayableSampleMp4(tempFile)
-        }
-
-        onProgress(1.0f)
-        tempFile
     }
 
-    private fun isHtmlFile(file: File): Boolean {
+    private fun isHtmlOrJsonFile(file: File): Boolean {
         return try {
             val head = ByteArray(64.coerceAtMost(file.length().toInt()))
             file.inputStream().use { it.read(head) }
             val str = String(head, Charsets.UTF_8).trim().lowercase()
-            str.startsWith("<!doctype") || str.startsWith("<html") || str.startsWith("<head")
+            str.startsWith("<!doctype") || str.startsWith("<html") || str.startsWith("<head") || str.startsWith("{\"code\"")
         } catch (_: Exception) {
             false
         }
@@ -936,18 +1021,19 @@ class SocialVideoExtractor {
             }
             if (streamUrl.isBlank()) return null
             val title = json.optString("filename")
-                .ifEmpty { json.optJSONObject("data")?.optString("title") ?: platform.sampleTitle }
+                .ifEmpty { json.optJSONObject("data")?.optString("title") ?: "${platform.displayName} Video" }
 
             return buildResultFromStreams(
                 sourceUrl = url,
                 platform = platform,
                 title = title.removeSuffix(".mp4"),
-                description = platform.sampleCaption,
+                description = title,
                 author = extractAuthorHandle(url, platform),
                 durationSec = 18,
                 thumbUrl = "",
                 hdUrl = streamUrl,
                 sdUrl = streamUrl,
+                fallbackUrls = listOf(streamUrl),
                 audioUrl = null
             )
         }
@@ -967,33 +1053,42 @@ class SocialVideoExtractor {
         return null
     }
 
+    /**
+     * Matches both standard JSON `"fieldName":"value"` and backslash-escaped `\"fieldName\":\"value\"`
+     */
     private fun extractJsonField(text: String, fieldName: String): String? {
-        val pattern = Pattern.compile("\"${Pattern.quote(fieldName)}\"\\s*:\\s*\"([^\"]+)\"")
-        val matcher = pattern.matcher(text)
-        while (matcher.find()) {
-            val raw = matcher.group(1) ?: continue
-            val unescaped = unescapeJsonUrl(raw)
-            if (unescaped.isNotBlank()) return unescaped
+        val patterns = listOf(
+            "\"${Pattern.quote(fieldName)}\"\\s*:\\s*\"([^\"]+)\"",
+            "\\\\\"${Pattern.quote(fieldName)}\\\\\"\\s*:\\s*\\\\\"([^\\\\\"]+)\\\\\""
+        )
+        for (pat in patterns) {
+            val matcher = Pattern.compile(pat).matcher(text)
+            while (matcher.find()) {
+                val raw = matcher.group(1) ?: continue
+                val unescaped = unescapeJsonUrl(raw)
+                if (unescaped.isNotBlank() && unescaped != "null") return unescaped
+            }
         }
         return null
     }
 
     private fun unescapeJsonUrl(raw: String): String {
         var s = raw
+            .replace("\\\\/", "/")
             .replace("\\/", "/")
+            .replace("\\\\u0025", "%")
             .replace("\\u0025", "%")
+            .replace("\\\\u0026", "&")
             .replace("\\u0026", "&")
+            .replace("\\\\u003d", "=")
             .replace("\\u003d", "=")
             .replace("\\u003D", "=")
             .replace("\\u003f", "?")
             .replace("\\u003F", "?")
             .replace("&amp;", "&")
-        if (s.contains("%3A%2F%2F") || s.contains("%2F")) {
+        if (s.startsWith("https%3A") || s.startsWith("http%3A")) {
             try {
-                // Only decode if the whole URL was percent-encoded
-                if (s.startsWith("https%3A") || s.startsWith("http%3A")) {
-                    s = java.net.URLDecoder.decode(s, "UTF-8")
-                }
+                s = java.net.URLDecoder.decode(s, "UTF-8")
             } catch (_: Exception) {
             }
         }
@@ -1063,5 +1158,11 @@ class SocialVideoExtractor {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val BOT_USER_AGENT =
             "TelegramBot (like TwitterBot)"
+        private const val YOUTUBE_VR_USER_AGENT =
+            "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1; Cronet/132.0.6808.3)"
+        private const val YOUTUBE_IOS_USER_AGENT =
+            "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+        private const val YOUTUBE_TESTSUITE_USER_AGENT =
+            "com.google.android.youtube/1.9 (Linux; U; Android 14; en_US)"
     }
 }

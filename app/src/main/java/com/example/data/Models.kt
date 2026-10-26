@@ -119,6 +119,7 @@ data class VideoQualityOption(
     val bitrateKbps: Int,
     val estimatedSizeMb: Double,
     val streamUrl: String,
+    val fallbackStreamUrls: List<String> = emptyList(),
     val isNoWatermark: Boolean = true,
     val isAudioOnly: Boolean = false
 )

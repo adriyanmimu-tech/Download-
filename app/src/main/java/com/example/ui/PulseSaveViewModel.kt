@@ -41,7 +41,7 @@ data class ActiveVideoPlayerState(
 
 data class PulseSaveUiState(
     val currentTab: PulseSaveTab = PulseSaveTab.DOWNLOADER,
-    val urlInput: String = SocialPlatform.TIKTOK.sampleUrl,
+    val urlInput: String = "",
     val detectedPlatform: SocialPlatform = SocialPlatform.TIKTOK,
     val isAnalyzingLink: Boolean = false,
     val showQualityPopup: Boolean = false,
@@ -91,7 +91,7 @@ class PulseSaveViewModel(
     }
 
     fun updateUrlInput(newUrl: String) {
-        val platform = SocialPlatform.detectFromUrl(newUrl)
+        val platform = if (newUrl.isBlank()) _uiState.value.detectedPlatform else SocialPlatform.detectFromUrl(newUrl)
         _uiState.update {
             it.copy(
                 urlInput = newUrl,
@@ -103,25 +103,33 @@ class PulseSaveViewModel(
     fun selectSamplePlatform(platform: SocialPlatform) {
         _uiState.update {
             it.copy(
-                urlInput = platform.sampleUrl,
                 detectedPlatform = platform,
-                statusSnackbarMessage = "${platform.displayName} লিংক লোড হয়েছে! এখন ডাউনলোড বাটনে ট্যাপ করুন।"
+                statusSnackbarMessage = "${platform.displayName} সিলেক্ট হয়েছে — এখন আপনার ${platform.displayName} ভিডিওর আসল লিংক পেস্ট করুন!"
             )
         }
     }
 
-    fun analyzeAndOpenQualityPopup() {
+    fun analyzeAndOpenQualityPopup(context: Context) {
         val currentUrl = _uiState.value.urlInput.trim()
         if (currentUrl.isEmpty()) {
             _uiState.update {
-                it.copy(statusSnackbarMessage = "অনুগ্রহ করে প্রথমে একটি ভিডিও লিংক পেস্ট করুন!")
+                it.copy(statusSnackbarMessage = "অনুগ্রহ করে প্রথমে একটি আসল ভিডিও লিংক পেস্ট করুন!")
             }
             return
         }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isAnalyzingLink = true) }
-            val result = extractor.analyzeVideoLink(currentUrl, apiSettings.value)
+            val result = extractor.analyzeVideoLink(context, currentUrl, apiSettings.value)
+            if (result == null) {
+                _uiState.update {
+                    it.copy(
+                        isAnalyzingLink = false,
+                        statusSnackbarMessage = "এই লিংক থেকে সরাসরি ভিডিও স্ট্রিম পাওয়া যায়নি। ভিডিওটি পাবলিক কি না চেক করুন!"
+                    )
+                }
+                return@launch
+            }
             val firstQuality = result.qualities.firstOrNull()
             _uiState.update {
                 it.copy(
@@ -172,22 +180,34 @@ class PulseSaveViewModel(
                     showQualityPopup = false,
                     isDownloadingAndScrubbing = true,
                     downloadProgress = 0.05f,
-                    progressMessage = "${analysis.platform.displayName} সার্ভার থেকে ${quality.resolution} স্ট্রিম ডাউনলোড হচ্ছে…"
+                    progressMessage = "${analysis.platform.displayName} থেকে আসল ভিডিও ডাউনলোড হচ্ছে…"
                 )
             }
 
             val rawTempFile = extractor.downloadVideoStreamToCache(
+                context = context,
                 cacheDir = context.cacheDir,
+                sourcePageUrl = analysis.sourceUrl,
                 qualityOption = quality,
                 onProgress = { pct ->
                     _uiState.update {
                         it.copy(
                             downloadProgress = (pct * 0.55f).coerceIn(0.05f, 0.55f),
-                            progressMessage = "ভিডিও ডাউনলোড হচ্ছে (${(pct * 100).toInt()}%)…"
+                            progressMessage = "আসল ভিডিও স্ট্রিম ডাউনলোড হচ্ছে (${(pct * 100).toInt()}%)…"
                         )
                     }
                 }
             )
+
+            if (rawTempFile == null || !rawTempFile.exists()) {
+                _uiState.update {
+                    it.copy(
+                        isDownloadingAndScrubbing = false,
+                        statusSnackbarMessage = "ভিডিও স্ট্রিম ডাউনলোড করা যায়নি। অনুগ্রহ করে লিংকটি আবার চেক করুন।"
+                    )
+                }
+                return@launch
+            }
 
             val report = FypMediaScrubberEngine.scrubAndSaveToGallery(
                 context = context,
@@ -233,7 +253,7 @@ class PulseSaveViewModel(
                     isDownloadingAndScrubbing = false,
                     downloadProgress = 1f,
                     latestDownloaderReport = report,
-                    statusSnackbarMessage = "গ্যালারিতে সেভ সম্পন্ন! মেটাডাটা রিমুভ ও নতুন MD5 হ্যাশ তৈরি হয়েছে।"
+                    statusSnackbarMessage = "গ্যালারিতে আসল ভিডিও সেভ সম্পন্ন! মেটাডাটা রিমুভ ও নতুন MD5 হ্যাশ তৈরি হয়েছে।"
                 )
             }
         }
@@ -284,6 +304,14 @@ class PulseSaveViewModel(
 
     fun cleanSelectedLocalVideo(context: Context) {
         val state = _uiState.value
+        val localUri = state.selectedLocalUri
+        if (localUri == null) {
+            _uiState.update {
+                it.copy(statusSnackbarMessage = "অনুগ্রহ করে প্রথমে গ্যালারি থেকে একটি ভিডিও সিলেক্ট করুন!")
+            }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -293,19 +321,23 @@ class PulseSaveViewModel(
             }
 
             val inputFile = File(context.cacheDir, "local_source_${System.currentTimeMillis()}.mp4")
-            val localUri = state.selectedLocalUri
-            if (localUri != null) {
-                try {
-                    context.contentResolver.openInputStream(localUri)?.use { input ->
-                        FileOutputStream(inputFile).use { output ->
-                            input.copyTo(output)
-                        }
+            try {
+                context.contentResolver.openInputStream(localUri)?.use { input ->
+                    FileOutputStream(inputFile).use { output ->
+                        input.copyTo(output)
                     }
-                } catch (_: Exception) {
                 }
+            } catch (_: Exception) {
             }
+
             if (!inputFile.exists() || inputFile.length() == 0L) {
-                FypMediaScrubberEngine.generateValidPlayableSampleMp4(inputFile)
+                _uiState.update {
+                    it.copy(
+                        isScrubbingLocal = false,
+                        statusSnackbarMessage = "গ্যালারি থেকে ভিডিও ফাইলটি পড়া যায়নি। আবার সিলেক্ট করুন।"
+                    )
+                }
+                return@launch
             }
 
             val title = state.localInspection?.fileName?.removeSuffix(".mp4") ?: "Gallery_Cleaned_Video"
