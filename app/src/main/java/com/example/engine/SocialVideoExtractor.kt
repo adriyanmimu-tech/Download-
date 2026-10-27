@@ -92,6 +92,24 @@ class SocialVideoExtractor {
             }
             SocialPlatform.YOUTUBE -> {
                 extractYouTubeVideo(cleanUrl)?.let { return@withContext it }
+                val vid = extractYouTubeVideoId(cleanUrl)
+                val ytTarget = if (vid != null) "https://m.youtube.com/watch?v=$vid" else cleanUrl
+                val sniffedYt = WebViewVideoSniffer.sniffVideoStream(context, ytTarget)
+                if (sniffedYt != null && sniffedYt.videoUrl.startsWith("http")) {
+                    return@withContext buildResultFromStreams(
+                        sourceUrl = cleanUrl,
+                        platform = SocialPlatform.YOUTUBE,
+                        title = sniffedYt.title.ifBlank { "YouTube Video" },
+                        description = sniffedYt.title,
+                        author = "@youtube_creator",
+                        durationSec = 30,
+                        thumbUrl = if (vid != null) "https://i.ytimg.com/vi/$vid/hqdefault.jpg" else "",
+                        hdUrl = sniffedYt.videoUrl,
+                        sdUrl = sniffedYt.videoUrl,
+                        fallbackUrls = listOf(sniffedYt.videoUrl),
+                        audioUrl = null
+                    )
+                }
             }
             SocialPlatform.PINTEREST -> {
                 extractPinterestVideo(cleanUrl)?.let { return@withContext it }
@@ -643,6 +661,56 @@ class SocialVideoExtractor {
             } catch (_: Exception) {
             }
         }
+
+        // Strategy 5: Direct Mobile Web ytInitialPlayerResponse parsing
+        try {
+            val webReq = Request.Builder()
+                .url("https://m.youtube.com/watch?v=$videoId")
+                .header("User-Agent", MOBILE_USER_AGENT)
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+            httpClient.newCall(webReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val html = resp.body?.string() ?: ""
+                    val m = Regex("ytInitialPlayerResponse\\s*=\\s*(\\{.+?\\});(?:var|\\s*</script>)").find(html)
+                    if (m != null) {
+                        val json = JSONObject(m.groupValues[1])
+                        val videoDetails = json.optJSONObject("videoDetails")
+                        val title = videoDetails?.optString("title")?.ifBlank { foundTitle } ?: foundTitle
+                        val author = videoDetails?.optString("author")?.takeIf { it.isNotBlank() }?.let { "@$it" } ?: foundAuthor
+                        val desc = videoDetails?.optString("shortDescription")?.ifBlank { title } ?: title
+                        val duration = videoDetails?.optString("lengthSeconds")?.toIntOrNull() ?: foundDuration
+                        val streamingData = json.optJSONObject("streamingData")
+                        val formats = streamingData?.optJSONArray("formats") ?: JSONArray()
+                        val webMp4s = mutableListOf<String>()
+                        for (i in 0 until formats.length()) {
+                            val fmt = formats.getJSONObject(i)
+                            val streamUrl = fmt.optString("url")
+                            if (streamUrl.startsWith("http")) {
+                                webMp4s.add(streamUrl)
+                            }
+                        }
+                        if (webMp4s.isNotEmpty()) {
+                            return buildResultFromStreams(
+                                sourceUrl = url,
+                                platform = SocialPlatform.YOUTUBE,
+                                title = title,
+                                description = desc,
+                                author = author,
+                                durationSec = duration,
+                                thumbUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+                                hdUrl = webMp4s.first(),
+                                sdUrl = webMp4s.last(),
+                                fallbackUrls = webMp4s,
+                                audioUrl = null
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
         return null
     }
 
@@ -914,12 +982,13 @@ class SocialVideoExtractor {
         val downloadUserAgent = when {
             isGoogleVideo && "c=IOS" in streamUrl -> YOUTUBE_IOS_USER_AGENT
             isGoogleVideo && "c=ANDROID_TESTSUITE" in streamUrl -> YOUTUBE_TESTSUITE_USER_AGENT
-            isGoogleVideo -> YOUTUBE_VR_USER_AGENT
+            isGoogleVideo && "c=ANDROID_VR" in streamUrl -> YOUTUBE_VR_USER_AGENT
+            isGoogleVideo && "c=WEB" in streamUrl -> DESKTOP_USER_AGENT
             else -> MOBILE_USER_AGENT
         }
 
         val referer = when {
-            isGoogleVideo -> ""
+            isGoogleVideo -> "https://www.youtube.com/"
             "tikwm.com" in streamUrl || "tiktok" in streamUrl -> "https://www.tiktok.com/"
             "instagram" in streamUrl || "cdninstagram" in streamUrl -> "https://www.instagram.com/"
             "fbcdn" in streamUrl || "facebook" in streamUrl -> "https://www.facebook.com/"
@@ -937,16 +1006,15 @@ class SocialVideoExtractor {
             if (referer.isNotBlank()) {
                 reqBuilder.header("Referer", referer)
             }
-            if (!isGoogleVideo) {
-                val cookie = try {
-                    CookieManager.getInstance().getCookie(streamUrl)
-                        ?: CookieManager.getInstance().getCookie(sourcePageUrl)
-                } catch (_: Exception) {
-                    null
-                }
-                if (!cookie.isNullOrBlank()) {
-                    reqBuilder.header("Cookie", cookie)
-                }
+            val cookie = try {
+                CookieManager.getInstance().getCookie(streamUrl)
+                    ?: CookieManager.getInstance().getCookie(sourcePageUrl)
+                    ?: if (isGoogleVideo) CookieManager.getInstance().getCookie("https://www.youtube.com") else null
+            } catch (_: Exception) {
+                null
+            }
+            if (!cookie.isNullOrBlank()) {
+                reqBuilder.header("Cookie", cookie)
             }
 
             httpClient.newCall(reqBuilder.build()).execute().use { response ->

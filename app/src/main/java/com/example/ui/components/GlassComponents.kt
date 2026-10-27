@@ -707,6 +707,7 @@ fun platformIconVector(platform: SocialPlatform): ImageVector {
 fun ScrubReportVerificationCard(
     report: VideoScrubReport,
     onPlayVideoClick: () -> Unit,
+    onPostToTikTokClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     GlassCard(
@@ -794,7 +795,41 @@ fun ScrubReportVerificationCard(
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        if (onPostToTikTokClick != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color(0xFF00F2FE),
+                                Color(0xFF161823),
+                                Color(0xFFFF0050)
+                            )
+                        )
+                    )
+                    .clickable(onClick = onPostToTikTokClick)
+                    .padding(vertical = 12.dp)
+                    .testTag("direct_post_tiktok_button")
+            ) {
+                OriginalSocialAppIcon(
+                    platform = SocialPlatform.TIKTOK,
+                    size = 20.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "🚀 TikTok-এ ১-ক্লিকে পোস্ট করুন (ক্যাপশন রেডি)",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         Row(
             verticalAlignment = Alignment.CenterVertically,

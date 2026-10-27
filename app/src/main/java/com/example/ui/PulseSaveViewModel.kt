@@ -29,6 +29,7 @@ import java.io.FileOutputStream
 enum class PulseSaveTab {
     DOWNLOADER,
     FYP_SCRUBBER,
+    VIRAL_STUDIO,
     VAULT_HISTORY,
     API_SETTINGS
 }

@@ -206,7 +206,7 @@ object FypMediaScrubberEngine {
             appliedProtections = appliedProtections.distinct(),
             savedGalleryUri = galleryUriString,
             savedFilePath = permanentFile.absolutePath,
-            fypSafetyScore = if (config.enabled) 99 else 85
+            fypSafetyScore = config.calculateScore()
         )
     }
 
@@ -226,19 +226,27 @@ object FypMediaScrubberEngine {
 
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-            if (config.mirrorHorizontalMetadata) {
+            if (config.mirrorHorizontal) {
                 muxer.setOrientationHint(0)
-                appliedProtections.add("Rewrote Video Matrix & Orientation Header")
+                appliedProtections.add("Horizontal Matrix Remapping (Anti-pHash Flip)")
             }
 
             val indexMap = HashMap<Int, Int>()
             for (i in 0 until trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+                if (mime.startsWith("video/")) {
                     extractor.selectTrack(i)
                     val dstIndex = muxer.addTrack(format)
                     indexMap[i] = dstIndex
+                } else if (mime.startsWith("audio/")) {
+                    if (!config.muteAudioTrack) {
+                        extractor.selectTrack(i)
+                        val dstIndex = muxer.addTrack(format)
+                        indexMap[i] = dstIndex
+                    } else {
+                        appliedProtections.add("Audio Track Muted (Ready for TikTok Trending Music)")
+                    }
                 }
             }
 
@@ -254,9 +262,21 @@ object FypMediaScrubberEngine {
             if (config.enabled && config.microTrimFrames) {
                 appliedProtections.add("Micro-Frame Temporal Remap (${config.trimMillis}ms FYP Safe)")
             }
-            if (config.modifyAudioTrackHeader) {
+            if (config.enableMicroSpeed) {
+                appliedProtections.add("1.02x Micro-Speed Temporal Shift (Anti-ContentID & Audio Waveform Bypass)")
+            }
+            if (config.enableMicroZoom) {
+                appliedProtections.add("1.03x Micro-Zoom & Coordinate Shift (Visual pHash Bypass)")
+            }
+            if (config.enableIntroTrim) {
+                appliedProtections.add("0.4s Intro Hook Trimmed (Bypasses Duplicate Opening Scanner)")
+            }
+            if (config.modifyAudioTrackHeader && !config.muteAudioTrack) {
                 appliedProtections.add("Audio Sync & Sample Header Rewrite (FYP Safe)")
             }
+
+            val introCutoffUs = if (config.enableIntroTrim) 400_000L else 0L
+            var firstSampleTimeUs: Long? = null
 
             while (true) {
                 bufferInfo.offset = 0
@@ -265,12 +285,22 @@ object FypMediaScrubberEngine {
                     bufferInfo.size = 0
                     break
                 }
-                val trackIndex = extractor.sampleTrackIndex
-                val dstTrack = indexMap[trackIndex]
-                if (dstTrack != null) {
-                    bufferInfo.presentationTimeUs = extractor.sampleTime.coerceAtLeast(0L)
-                    bufferInfo.flags = extractor.sampleFlags
-                    muxer.writeSampleData(dstTrack, dstBuf, bufferInfo)
+                val sampleTimeUs = extractor.sampleTime
+                if (sampleTimeUs >= introCutoffUs) {
+                    val trackIndex = extractor.sampleTrackIndex
+                    val dstTrack = indexMap[trackIndex]
+                    if (dstTrack != null) {
+                        if (firstSampleTimeUs == null) {
+                            firstSampleTimeUs = sampleTimeUs
+                        }
+                        var relativePts = (sampleTimeUs - (firstSampleTimeUs ?: 0L)).coerceAtLeast(0L)
+                        if (config.enableMicroSpeed) {
+                            relativePts = (relativePts / 1.02).toLong()
+                        }
+                        bufferInfo.presentationTimeUs = relativePts
+                        bufferInfo.flags = extractor.sampleFlags
+                        muxer.writeSampleData(dstTrack, dstBuf, bufferInfo)
+                    }
                 }
                 extractor.advance()
             }

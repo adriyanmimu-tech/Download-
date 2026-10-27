@@ -75,6 +75,7 @@ fun DownloaderScreen(
     onSelectSamplePlatform: (SocialPlatform) -> Unit,
     onClickDownloadButton: () -> Unit,
     onPlayLatestVideo: () -> Unit,
+    onPostLatestToTikTok: () -> Unit,
     onNavigateToLocalScrubber: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -387,7 +388,8 @@ fun DownloaderScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 ScrubReportVerificationCard(
                     report = latestScrubReport,
-                    onPlayVideoClick = onPlayLatestVideo
+                    onPlayVideoClick = onPlayLatestVideo,
+                    onPostToTikTokClick = onPostLatestToTikTok
                 )
             }
 

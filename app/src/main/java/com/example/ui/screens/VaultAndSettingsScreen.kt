@@ -57,8 +57,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.ExtractorApiSettings
+import com.example.data.SocialPlatform
 import com.example.data.VaultVideoEntity
 import com.example.ui.components.GlassCard
+import com.example.ui.components.OriginalSocialAppIcon
 import com.example.ui.theme.AbyssalBlue
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldSafe
@@ -78,6 +80,7 @@ fun VaultHistoryScreen(
     onPlayVideo: (VaultVideoEntity) -> Unit,
     onCopyCaption: (VaultVideoEntity) -> Unit,
     onShareVideo: (VaultVideoEntity) -> Unit,
+    onPostToTikTok: (VaultVideoEntity) -> Unit,
     onDeleteVideo: (Int) -> Unit,
     onBackToHome: () -> Unit,
     modifier: Modifier = Modifier
@@ -154,6 +157,7 @@ fun VaultHistoryScreen(
                             onPlay = { onPlayVideo(item) },
                             onCopyCaption = { onCopyCaption(item) },
                             onShare = { onShareVideo(item) },
+                            onPostToTikTok = { onPostToTikTok(item) },
                             onDelete = { onDeleteVideo(item.id) }
                         )
                     }
@@ -169,6 +173,7 @@ private fun VaultVideoCard(
     onPlay: () -> Unit,
     onCopyCaption: () -> Unit,
     onShare: () -> Unit,
+    onPostToTikTok: () -> Unit,
     onDelete: () -> Unit
 ) {
     GlassCard(
@@ -354,6 +359,39 @@ private fun VaultVideoCard(
                     tint = RoseDanger
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            androidx.compose.ui.graphics.Color(0xFF00F2FE),
+                            androidx.compose.ui.graphics.Color(0xFF161823),
+                            androidx.compose.ui.graphics.Color(0xFFFF0050)
+                        )
+                    )
+                )
+                .clickable(onClick = onPostToTikTok)
+                .padding(vertical = 10.dp)
+                .testTag("vault_post_tiktok_${video.id}")
+        ) {
+            OriginalSocialAppIcon(
+                platform = SocialPlatform.TIKTOK,
+                size = 18.dp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "🚀 TikTok-এ পোস্ট করুন (ক্যাপশন ও হ্যাশট্যাগ সহ)",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = androidx.compose.ui.graphics.Color.White
+            )
         }
     }
 }

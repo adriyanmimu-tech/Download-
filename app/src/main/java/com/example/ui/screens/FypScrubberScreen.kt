@@ -79,6 +79,7 @@ fun FypScrubberScreen(
     onUpdateFypConfig: (FypOptimizationConfig) -> Unit,
     onCleanSelectedVideo: () -> Unit,
     onPlayCleanedVideo: () -> Unit,
+    onPostCleanedToTikTok: (() -> Unit)? = null,
     onBackToHome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -300,20 +301,54 @@ fun FypScrubberScreen(
             }
 
             // Step 3: Anti-Copyright & FYP Safe Engine Controls
-            GlassCard(accentGlowColor = VividViolet) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = ElectricCyan,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "২. Anti-Copyright ও FYP Safe ইঞ্জিন কনফিগারেশন",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextPrimarySnow
-                    )
+            val currentScore = fypConfig.calculateScore()
+            GlassCard(accentGlowColor = if (currentScore >= 95) EmeraldSafe else VividViolet) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = EmeraldSafe,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "২. Anti-Copyright ও FYP Safe ইঞ্জিন",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimarySnow
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(EmeraldSafe.copy(alpha = 0.15f))
+                                        .border(1.dp, EmeraldSafe.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "$currentScore% FYP READY",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = EmeraldSafe,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "রি-আপলোড কপিরাইট ও 'Not Eligible for FYP' বাইপাস",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = EmeraldSafe
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -330,6 +365,41 @@ fun FypScrubberScreen(
                     subtitle = "প্রতিবার এক্সপোর্টে ১০০% ইউনিক বাইনারি হ্যাশ তৈরি করবে",
                     checked = fypConfig.randomizeMd5Hash,
                     onCheckedChange = { onUpdateFypConfig(fypConfig.copy(randomizeMd5Hash = it)) }
+                )
+
+                ScrubberToggleItem(
+                    title = "1.02x মাইক্রো-স্পিড (অডিও Content-ID ও সাউন্ড বাইপাস)",
+                    subtitle = "ভিডিও ও অডিওকে ২% ফাস্ট করে স্বয়ংক্রিয় অডিও মিউট ও কপিরাইট ব্লক ঠেকাবে",
+                    checked = fypConfig.enableMicroSpeed,
+                    onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableMicroSpeed = it)) }
+                )
+
+                ScrubberToggleItem(
+                    title = "1.03x মাইক্রো-জুম ও ফ্রেম শিফট (ভিজ্যুয়াল pHash বাইপাস)",
+                    subtitle = "পিক্সেল কোঅর্ডিনেট পরিবর্তন করে AI ভিডিও ফ্রেম ম্যাচিং বাইপাস করবে",
+                    checked = fypConfig.enableMicroZoom,
+                    onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableMicroZoom = it)) }
+                )
+
+                ScrubberToggleItem(
+                    title = "০.৪ সেকেন্ড ইন্ট্রো হুক ট্রিম (ভিডিও শুরুর রি-আপলোড স্ক্যানার বাইপাস)",
+                    subtitle = "অ্যালগরিদম প্রথম ফ্রেম স্ক্যান করে—শুরু ট্রিম করলে ফ্রেশ ভিডিও মনে করবে",
+                    checked = fypConfig.enableIntroTrim,
+                    onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableIntroTrim = it)) }
+                )
+
+                ScrubberToggleItem(
+                    title = "হরিজন্টাল মিরর ফ্লিপ (ডান-বাম উল্টানো)",
+                    subtitle = "ভিডিও ডানে-বামে ফ্লিপ করে মেটা ও টিকটক রি-আপলোড ফিল্টারকে বিভ্রান্ত করবে",
+                    checked = fypConfig.mirrorHorizontal,
+                    onCheckedChange = { onUpdateFypConfig(fypConfig.copy(mirrorHorizontal = it)) }
+                )
+
+                ScrubberToggleItem(
+                    title = "অরিজিনাল অডিও মিউট করুন (Mute)",
+                    subtitle = "টিকটকের ট্রেন্ডিং মিউজিক অ্যাড করার জন্য অডিও রিমুভ করে রাখবে",
+                    checked = fypConfig.muteAudioTrack,
+                    onCheckedChange = { onUpdateFypConfig(fypConfig.copy(muteAudioTrack = it)) }
                 )
 
                 ScrubberToggleItem(
@@ -462,7 +532,8 @@ fun FypScrubberScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 ScrubReportVerificationCard(
                     report = latestReport,
-                    onPlayVideoClick = onPlayCleanedVideo
+                    onPlayVideoClick = onPlayCleanedVideo,
+                    onPostToTikTokClick = onPostCleanedToTikTok
                 )
             }
 

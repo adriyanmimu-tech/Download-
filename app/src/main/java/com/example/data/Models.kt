@@ -143,11 +143,28 @@ data class FypOptimizationConfig(
     val randomizeMd5Hash: Boolean = true,
     val microTrimFrames: Boolean = true,
     val trimMillis: Long = 180L,
+    val enableMicroSpeed: Boolean = true, // 1.02x speed modification for anti-ContentID
+    val enableMicroZoom: Boolean = true,  // 1.03x visual pHash altering crop
+    val mirrorHorizontal: Boolean = false, // Horizontal mirror flip
+    val enableIntroTrim: Boolean = true,  // 0.4s opening hook trim to remove re-upload match
+    val muteAudioTrack: Boolean = false,  // Strip audio for adding trending TikTok music
     val modifyAudioTrackHeader: Boolean = true,
-    val mirrorHorizontalMetadata: Boolean = false,
     val injectFreshCreationTimestamp: Boolean = true,
     val customCameraDeviceTag: String = "iPhone 16 Pro Max (iOS 18.1)"
-)
+) {
+    fun calculateScore(): Int {
+        if (!enabled) return 60
+        var score = 75
+        if (stripAllMetadata) score += 5
+        if (randomizeMd5Hash) score += 5
+        if (microTrimFrames) score += 4
+        if (enableMicroSpeed) score += 4
+        if (enableMicroZoom) score += 3
+        if (enableIntroTrim) score += 2
+        if (mirrorHorizontal) score += 2
+        return score.coerceAtMost(100)
+    }
+}
 
 data class LocalVideoInspection(
     val uriString: String,
@@ -180,3 +197,95 @@ data class VideoScrubReport(
     val savedFilePath: String,
     val fypSafetyScore: Int
 )
+
+data class ViralHashtagPack(
+    val categoryName: String,
+    val iconEmoji: String,
+    val hashtags: List<String>
+)
+
+data class ViralHook(
+    val title: String,
+    val category: String,
+    val psychologicalTrigger: String
+)
+
+object ViralSeoBank {
+    val hashtagPacks = listOf(
+        ViralHashtagPack(
+            categoryName = "অল-ইন-ওয়ান ভাইরাল (FYP)",
+            iconEmoji = "🔥",
+            hashtags = listOf("#fyp", "#foryou", "#foryoupage", "#viral", "#trending", "#reels", "#shorts", "#tiktokbangladesh", "#explorepage", "#viralvideo")
+        ),
+        ViralHashtagPack(
+            categoryName = "কমেডি ও ফানি",
+            iconEmoji = "😂",
+            hashtags = listOf("#funny", "#comedy", "#humor", "#memes", "#funnymoments", "#relatable", "#laughter", "#tiktokfunny", "#bdfunny")
+        ),
+        ViralHashtagPack(
+            categoryName = "মোটিভেশন ও মাইন্ডসেট",
+            iconEmoji = "💪",
+            hashtags = listOf("#motivation", "#mindset", "#discipline", "#success", "#grind", "#gymmotivation", "#workout", "#inspiration", "#lifetips")
+        ),
+        ViralHashtagPack(
+            categoryName = "টেকনোলজি ও মোবাইল ট্রিকস",
+            iconEmoji = "💻",
+            hashtags = listOf("#tech", "#technology", "#techtips", "#gadgets", "#smartphone", "#cooltech", "#lifehacks", "#techtok", "#androidtips")
+        ),
+        ViralHashtagPack(
+            categoryName = "এস্থেটিক ও সিনেম্যাটিক",
+            iconEmoji = "✨",
+            hashtags = listOf("#aesthetic", "#cinematic", "#vibes", "#minivlog", "#dailyroutine", "#mood", "#relaxing", "#slowmo", "#chillvibes")
+        ),
+        ViralHashtagPack(
+            categoryName = "গেমিং ও হাইলাইটস",
+            iconEmoji = "🎮",
+            hashtags = listOf("#gaming", "#gamer", "#gameplay", "#clutch", "#streamer", "#esports", "#gamingclips", "#highlights", "#pubgmobile")
+        )
+    )
+
+    val viralHooks = listOf(
+        ViralHook(
+            title = "Wait till the very end... 😱",
+            category = "High Curiosity",
+            psychologicalTrigger = "শেষ পর্যন্ত দেখার অদম্য কৌতূহল তৈরি করে ওয়াচটাইম বহুগুণ বাড়ায়।"
+        ),
+        ViralHook(
+            title = "Nobody is talking about this secret trick 🤫",
+            category = "Exclusive Value",
+            psychologicalTrigger = "ইউজারকে স্পেশাল ও আনকমন ফিল দেয়।"
+        ),
+        ViralHook(
+            title = "I wish I knew this before starting! 🤯",
+            category = "Regret/FOMO",
+            psychologicalTrigger = "দর্শকের মিসিং আউট ভীতি জাগিয়ে পুরো ভিডিও দেখতে বাধ্য করে।"
+        ),
+        ViralHook(
+            title = "Stop scrolling! You definitely need to see this 👇",
+            category = "Pattern Interrupt",
+            psychologicalTrigger = "দ্রুত স্ক্রল করা আঙুল থামিয়ে দেয় (Hook Rate বৃদ্ধি)।"
+        ),
+        ViralHook(
+            title = "Save this video right now before it gets deleted ⚠️",
+            category = "High Urgency",
+            psychologicalTrigger = "অ্যালগরিদমের কাছে সেভ ও বুকমার্ক সিগন্যাল ৫ গুণ বাড়িয়ে দেয়।"
+        ),
+        ViralHook(
+            title = "This 10-second hack changed everything for me 🔥",
+            category = "Instant Transformation",
+            psychologicalTrigger = "সহজ ও দ্রুত ফলাফলের প্রতিশ্রুতি দেয়।"
+        )
+    )
+
+    fun getBestPostingTimeAdvice(): String {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return when (hour) {
+            in 6..10 -> "🌅 সকালের রিচ উইন্ডো (৮:০০ AM - ১০:০০ AM): সকালের নাস্তা বা যাত্রার সময় ভিউ দ্রুত আসে!"
+            in 11..15 -> "☀️ দুপুরের পিক আওয়ার (১২:০০ PM - ২:০০ PM): লাঞ্চ ব্রেকে টিকটক ও রিলস এঙ্গেজমেন্ট সর্বোচ্চ থাকে!"
+            in 16..18 -> "🌆 বিকেলের প্রি-পিক (৪:৩০ PM - ৬:০০ PM): স্কুল-কলেজ বা অফিস ছুটির পর প্রাথমিক রিচ পাওয়ার দারুণ সময়।"
+            in 19..23 -> "🔥 রাত ৮:০০ PM - ১০:৩০ PM (সর্বোচ্চ ভাইরাল গোল্ডেন টাইম): এ সময় দর্শক সবচেয়ে বেশি এক্টিভ থাকে এবং ওয়াচটাইম সর্বোচ্চ হয়!"
+            else -> "🌙 গভীর রাত: ভিডিও ড্রাফট বা শিডিউল করে রাখুন। সকাল ৮:০০টা বা দুপুর ১২:০০টায় পোস্ট করুন।"
+        }
+    }
+}
+

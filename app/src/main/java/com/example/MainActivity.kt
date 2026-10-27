@@ -9,6 +9,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -55,6 +58,7 @@ import com.example.ui.screens.DownloaderScreen
 import com.example.ui.screens.FypScrubberScreen
 import com.example.ui.screens.InAppVideoPlayerDialog
 import com.example.ui.screens.VaultHistoryScreen
+import com.example.ui.screens.ViralSeoScreen
 import com.example.ui.theme.AbyssalBlue
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.GlassBorderSubtle
@@ -168,6 +172,19 @@ fun PulseSaveMainApp(
                                     )
                                 }
                             },
+                            onPostLatestToTikTok = {
+                                uiState.latestDownloaderReport?.let { rep ->
+                                    directPostToTikTok(
+                                        context = context,
+                                        uriString = rep.savedGalleryUri,
+                                        filePath = rep.savedFilePath,
+                                        title = rep.title,
+                                        caption = uiState.editableCaption,
+                                        hashtags = uiState.editableHashtags
+                                    )
+                                    viewModel.showMessage("ক্যাপশন ও হ্যাশট্যাগ কপি করা হয়েছে! TikTok ওপেন হচ্ছে…")
+                                }
+                            },
                             onNavigateToLocalScrubber = {
                                 viewModel.selectTab(PulseSaveTab.FYP_SCRUBBER)
                             }
@@ -200,8 +217,30 @@ fun PulseSaveMainApp(
                                     )
                                 }
                             },
+                            onPostCleanedToTikTok = {
+                                uiState.latestLocalReport?.let { rep ->
+                                    directPostToTikTok(
+                                        context = context,
+                                        uriString = rep.savedGalleryUri,
+                                        filePath = rep.savedFilePath,
+                                        title = rep.title,
+                                        caption = "Cleaned with PulseSave FYP Safe",
+                                        hashtags = "#fyp #foryou #foryoupage #viral"
+                                    )
+                                    viewModel.showMessage("ক্যাপশন ও হ্যাশট্যাগ কপি করা হয়েছে! TikTok ওপেন হচ্ছে…")
+                                }
+                            },
                             onBackToHome = {
                                 viewModel.selectTab(PulseSaveTab.DOWNLOADER)
+                            }
+                        )
+                    }
+
+                    PulseSaveTab.VIRAL_STUDIO -> {
+                        ViralSeoScreen(
+                            onCopyText = { text, msg ->
+                                copyToClipboard(context, "Viral Content", text)
+                                viewModel.showMessage(msg)
                             }
                         )
                     }
@@ -223,6 +262,17 @@ fun PulseSaveMainApp(
                             },
                             onShareVideo = { item ->
                                 shareVideoUri(context, item.savedGalleryUri, item.title, item.caption)
+                            },
+                            onPostToTikTok = { item ->
+                                directPostToTikTok(
+                                    context = context,
+                                    uriString = item.savedGalleryUri,
+                                    filePath = item.localFilePath,
+                                    title = item.title,
+                                    caption = item.caption,
+                                    hashtags = item.hashtags
+                                )
+                                viewModel.showMessage("ক্যাপশন ও হ্যাশট্যাগ কপি করা হয়েছে! TikTok ওপেন হচ্ছে…")
                             },
                             onDeleteVideo = { id ->
                                 viewModel.deleteVaultVideo(id)
@@ -347,6 +397,20 @@ private fun GlassBottomNavigationBar(
         )
 
         NavigationBarItem(
+            selected = currentTab == PulseSaveTab.VIRAL_STUDIO,
+            onClick = { onSelectTab(PulseSaveTab.VIRAL_STUDIO) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.TrendingUp,
+                    contentDescription = "Viral Studio"
+                )
+            },
+            label = { Text("ভাইরাল") },
+            colors = navColors,
+            modifier = Modifier.testTag("nav_tab_viral_studio")
+        )
+
+        NavigationBarItem(
             selected = currentTab == PulseSaveTab.VAULT_HISTORY,
             onClick = { onSelectTab(PulseSaveTab.VAULT_HISTORY) },
             icon = {
@@ -411,5 +475,78 @@ private fun shareVideoUri(
         }
         context.startActivity(Intent.createChooser(shareIntent, "Share FYP-Safe Video"))
     } catch (_: Exception) {
+    }
+}
+
+private fun directPostToTikTok(
+    context: Context,
+    uriString: String,
+    filePath: String,
+    title: String,
+    caption: String,
+    hashtags: String
+) {
+    try {
+        // 1. Copy formatted viral caption & hashtags to clipboard automatically
+        val fullCaption = listOf(title, caption, hashtags)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        copyToClipboard(context, "TikTok Caption", fullCaption)
+
+        // 2. Resolve Uri (MediaStore Gallery Uri or FileProvider)
+        val videoUri: Uri = if (uriString.isNotBlank() && uriString.startsWith("content://")) {
+            Uri.parse(uriString)
+        } else {
+            val file = File(filePath)
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+        }
+
+        // 3. Find installed TikTok package
+        val tikTokPackages = listOf(
+            "com.zhiliaoapp.musically",       // TikTok Global
+            "com.ss.android.ugc.trill",       // TikTok Asia
+            "com.zhiliaoapp.musically.go"      // TikTok Lite
+        )
+
+        val pm = context.packageManager
+        val installedPackage = tikTokPackages.firstOrNull { pkg ->
+            try {
+                pm.getPackageInfo(pkg, 0)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "video/*"
+            putExtra(Intent.EXTRA_STREAM, videoUri)
+            putExtra(Intent.EXTRA_TEXT, fullCaption)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (installedPackage != null) {
+                setPackage(installedPackage)
+            }
+        }
+
+        if (installedPackage != null) {
+            context.startActivity(intent)
+        } else {
+            val chooser = Intent.createChooser(intent, "TikTok সিলেক্ট করুন (ক্যাপশন অলরেডি কপি করা হয়েছে)")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        }
+    } catch (_: Exception) {
+        val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "video/*"
+            putExtra(Intent.EXTRA_STREAM, Uri.parse(uriString))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(fallbackIntent, "TikTok-এ শেয়ার করুন"))
     }
 }

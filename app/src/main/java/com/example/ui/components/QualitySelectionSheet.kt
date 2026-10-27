@@ -216,10 +216,44 @@ fun QualitySelectionPopupSheet(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "ভাইরাল হ্যাশট্যাগ",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondarySlate
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(VividViolet.copy(alpha = 0.12f))
+                            .border(1.dp, VividViolet.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                            .clickable {
+                                val viralTags = "#fyp #foryou #viral #trending #reels #shorts"
+                                val newTags = if (editableHashtags.isBlank()) viralTags else "$editableHashtags $viralTags"
+                                onHashtagsChange(newTags)
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("append_viral_tags_button")
+                    ) {
+                        Text(
+                            text = "🔥 +ভাইরাল ট্যাগ যোগ করুন",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = VividViolet
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
                 OutlinedTextField(
                     value = editableHashtags,
                     onValueChange = onHashtagsChange,
-                    label = { Text("ভাইরাল হ্যাশট্যাগ (Hashtags)") },
+                    label = { Text("হ্যাশট্যাগসমূহ (Hashtags)") },
                     maxLines = 2,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = VividViolet,
@@ -322,9 +356,10 @@ fun QualitySelectionPopupSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Section 3: Anti-Copyright & TikTok "Not Eligible for For You" Bypass Engine
+            val currentScore = fypConfig.calculateScore()
             GlassCard(
                 cornerRadius = 20.dp,
-                accentGlowColor = VividViolet
+                accentGlowColor = if (currentScore >= 95) EmeraldSafe else VividViolet
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -343,11 +378,28 @@ fun QualitySelectionPopupSheet(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text(
-                                text = "৩. TikTok FYP Safe ও মেটাডাটা রিমুভার",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = TextPrimarySnow
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "৩. TikTok FYP Safe মোড",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimarySnow
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(EmeraldSafe.copy(alpha = 0.15f))
+                                        .border(1.dp, EmeraldSafe.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "$currentScore% FYP READY",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = EmeraldSafe,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                             Text(
                                 text = "রি-আপলোডে কপিরাইট ও 'Not Eligible For You' আসবে না",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -371,7 +423,7 @@ fun QualitySelectionPopupSheet(
 
                     FypOptionToggleRow(
                         title = "Deep MP4 Metadata & Origin Tag Strip (udta/meta)",
-                        subtitle = "TikTok/Reels/CapCut-এর লুকানো সোর্স আইডি ও EXIF মুছে ফেলবে",
+                        subtitle = "TikTok/Reels/CapCut-এর লুকানো সোর্স আইডি ও এনকোডার ট্যাগ মুছে ফেলবে",
                         checked = fypConfig.stripAllMetadata,
                         onCheckedChange = { onUpdateFypConfig(fypConfig.copy(stripAllMetadata = it)) }
                     )
@@ -382,10 +434,34 @@ fun QualitySelectionPopupSheet(
                         onCheckedChange = { onUpdateFypConfig(fypConfig.copy(randomizeMd5Hash = it)) }
                     )
                     FypOptionToggleRow(
-                        title = "ভিজ্যুয়াল মাইক্রো-ফ্রেম ও অডিও সিঙ্ক মডিফায়ার (FYP Safe)",
-                        subtitle = "ভিডিওর কোয়ালিটি নষ্ট না করে ১৮০ms ফ্রেম ও অডিও টাইমস্ট্যাম্প রি-ম্যাপ",
-                        checked = fypConfig.microTrimFrames,
-                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(microTrimFrames = it)) }
+                        title = "1.02x মাইক্রো-স্পিড (অডিও Content-ID ও সাউন্ড বাইপাস)",
+                        subtitle = "ভিডিও ও অডিওকে ২% ফাস্ট করে স্বয়ংক্রিয় অডিও মিউট ও কপিরাইট ব্লক ঠেকাবে",
+                        checked = fypConfig.enableMicroSpeed,
+                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableMicroSpeed = it)) }
+                    )
+                    FypOptionToggleRow(
+                        title = "1.03x মাইক্রো-জুম ও ফ্রেম শিফট (ভিজ্যুয়াল pHash বাইপাস)",
+                        subtitle = "পিক্সেল কোঅর্ডিনেট পরিবর্তন করে AI ভিডিও ফ্রেম ম্যাচিং বাইপাস করবে",
+                        checked = fypConfig.enableMicroZoom,
+                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableMicroZoom = it)) }
+                    )
+                    FypOptionToggleRow(
+                        title = "০.৪ সেকেন্ড ইন্ট্রো হুক ট্রিম (ভিডিও শুরুর রি-আপলোড স্ক্যানার বাইপাস)",
+                        subtitle = "অ্যালগরিদম প্রথম ফ্রেম স্ক্যান করে—শুরু ট্রিম করলে ফ্রেশ ভিডিও মনে করবে",
+                        checked = fypConfig.enableIntroTrim,
+                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(enableIntroTrim = it)) }
+                    )
+                    FypOptionToggleRow(
+                        title = "হরিজন্টাল মিরর ফ্লিপ (ডান-বাম উল্টানো)",
+                        subtitle = "ভিডিও ডানে-বামে ফ্লিপ করে মেটা ও টিকটক রি-আপলোড ফিল্টারকে বিভ্রান্ত করবে",
+                        checked = fypConfig.mirrorHorizontal,
+                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(mirrorHorizontal = it)) }
+                    )
+                    FypOptionToggleRow(
+                        title = "অরিজিনাল অডিও মিউট করুন (Mute)",
+                        subtitle = "টিকটকের ট্রেন্ডিং মিউজিক অ্যাড করার জন্য অডিও রিমুভ করে রাখবে",
+                        checked = fypConfig.muteAudioTrack,
+                        onCheckedChange = { onUpdateFypConfig(fypConfig.copy(muteAudioTrack = it)) }
                     )
                     FypOptionToggleRow(
                         title = "iPhone 16 Pro Max ক্যামেরা মেটাডাটা সিগনেচার ইনজেক্ট",
